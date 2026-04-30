@@ -1,11 +1,29 @@
 [project]
 name = "flushq"
 version = "0.1.0"
-description = "Stateless async batching queue with pluggable flush policies (size, interval, natural)"
+description = "Async batching queue with pluggable flush policies"
 readme = "README.md"
-license = {file = "LICENSE"}
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = []
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Framework :: AsyncIO",
+    "Typing :: Typed",
+    "Natural Language :: English",
+]
+
+[project.urls]
+Homepage = "https://github.com/nbocchinidev/flushq"
+Repository = "https://github.com/nbocchinidev/flushq"
 
 [build-system]
 requires = ["uv_build>=0.11.6,<0.12.0"]
