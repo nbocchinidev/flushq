@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Stateless async batching queue with pluggable flush policies (size, interval, natural)"
 readme = "README.md"
 license = {file = "LICENSE"}
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = []
 
 [build-system]
