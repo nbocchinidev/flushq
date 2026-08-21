@@ -28,7 +28,7 @@ Backpressure is handled automatically — `enqueue` blocks if the internal buffe
 
 ## Running it
 
-The context manager above is fine for a single producer. When the queue is one of several concurrent tasks, run it as a TaskGroup child instead. That way a failed flush then cancels the whole group immediatley, instead of waiting until the next enqueue to raise.
+The context manager above is fine for a single producer. When the queue is one of several concurrent tasks, run it as a TaskGroup child instead. That way a failed flush then cancels the whole group immediately, instead of waiting until the next enqueue to raise.
 
 ```python
 async with asyncio.TaskGroup() as tg:
@@ -41,9 +41,9 @@ async with asyncio.TaskGroup() as tg:
     writer.cancel() # end of stream, buffered events are drained and flushed
 ```
 
-A dead flush task never strands a producer because enqueue raises with the flush's error instead of blocking on a queue nothing will drain in both useage options.
+In both usage options, a dead flush task never strands a producer because enqueue raises with the flush's error instead of blocking on a queue nothing will drain
 
-## Delivery Contract
+## Delivery contract
 
 - A batch reaches flush_fn at most once, and is never empty.
 - A flush interrupted by cancellation is not retried, flush_fn owns the atomicity of its own side effects.
