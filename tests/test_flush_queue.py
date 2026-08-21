@@ -1,5 +1,6 @@
 import asyncio
 from collections import defaultdict
+import contextlib
 import typing
 import pytest
 
@@ -185,3 +186,65 @@ async def test_dedup_preserves_first_occurrence():
         await asyncio.sleep(0)
 
     assert flushed == [("a", 1), ("b", 1)]
+
+
+@pytest.mark.asyncio
+async def test_flush_failure_unblocks_a_producer_on_a_full_queue():
+    async def broken_flush(batch: list[int]) -> None:
+        raise RuntimeError("sink is dead")
+
+    q: FlushQueue[int] = FlushQueue(broken_flush, NaturalPolicy(), max_queue_size=2)
+
+    async def produce() -> None:
+        with pytest.raises(RuntimeError, match="sink is dead"):
+            async with q:
+                for n in range(10):
+                    await q.enqueue(n)
+
+    producer = asyncio.create_task(produce())
+    _, pending = await asyncio.wait({producer}, timeout=1.0)
+    if pending:
+        producer.cancel()
+        with contextlib.suppress(asyncio.CancelledError, RuntimeError):
+            await producer
+        pytest.fail("producer still blocked in enqueue() after flush task failed")
+    await producer
+
+
+@pytest.mark.asyncio
+async def test_an_idle_queue_never_produces_a_flush():
+    calls: list[list[int]] = []
+
+    async def record(batch: list[int]) -> None:
+        calls.append(batch)
+
+    q: FlushQueue[int] = FlushQueue(
+        record, IntervalPolicy(max_wait_seconds=0.05, max_records=10)
+    )
+    task = asyncio.create_task(q.run())
+    await asyncio.sleep(0.2)
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_batch_interrupted_mid_flush_is_settled_once_not_redelivered():
+    flushed: list[int] = []
+    first_flush_started = asyncio.Event()
+
+    async def slow_flush(batch: list[int]) -> None:
+        first_flush_started.set()
+        flushed.extend(batch)
+        await asyncio.sleep(0.2)
+
+    q: FlushQueue[int] = FlushQueue(slow_flush, NaturalPolicy())
+    task = asyncio.create_task(q.run())
+    await q.enqueue(1)
+    await first_flush_started.wait()
+    await q.enqueue(2)
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+    assert flushed == [1, 2]
