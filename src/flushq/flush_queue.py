@@ -16,10 +16,14 @@ class FlushQueue(typing.Generic[T]):
     Items are enqueued with ``enqueue`` and batched according to the provided ``FlushPolicy``. Each
     batch is passed to ``flush_fn``. Deduplicate within each batch by providing ``dedupe key``.
 
-    Use as an async context manager to handle startup and clean shutdown:
+    Run it either as a TaskGroup child (preferred because a failed flush fails the group
+    immediately) or as an async context manager to handle startup and clean shutdown:
 
         async with FlushQueue(flush_fn, policy) as q:
             await q.enqueue(item)
+
+    A batch reaches ``flush_fn`` at most once, never empty, and is not retried if cancellation
+    interrupts it. Queued items are drained on shutdown.
 
     Args:
         flush_fn: Async callable that receives each batch.
@@ -50,22 +54,53 @@ class FlushQueue(typing.Generic[T]):
         self._max_shutdown_batch_size = max_shutdown_batch_size
 
     async def enqueue(self, item: T) -> None:
-        await self._queue.put(item)
+        run_task = self._task
+        if run_task is not None and run_task.done():
+            self._raise_consumer_gone(run_task)
+        try:
+            self._queue.put_nowait(item)
+            return
+        except asyncio.QueueFull:
+            pass
+
+        if run_task is None:
+            await self._queue.put(item)
+            return
+
+        put = asyncio.ensure_future(self._queue.put(item))
+        done, _ = await asyncio.wait(
+            (put, run_task), return_when=asyncio.FIRST_COMPLETED
+        )
+        if put in done:
+            await put
+            return
+        put.cancel()
+        self._raise_consumer_gone(run_task)
+
+    def _raise_consumer_gone(self, run_task: asyncio.Task[None]) -> typing.NoReturn:
+        exc = run_task.exception() if not run_task.cancelled() else None
+        raise RuntimeError("flush task is dead, item not enqueued") from exc
 
     async def run(self) -> None:
+        if self._task is None:
+            self._task = asyncio.current_task()
+
         batch: list[T] = []
 
         try:
             while True:
                 await self._policy.collect(self._queue, batch)
-                await self._flush(batch)
-                batch = []
+                if not batch:
+                    continue
+
+                pending, batch = batch, []
+                await self._flush(pending)
         except asyncio.CancelledError:
             deadline = time.monotonic() + (self._max_shutdown_wait or float("inf"))
 
             while not self._queue.empty() and time.monotonic() < deadline:
                 batch.append(self._queue.get_nowait())
-                if len(batch) == self._max_shutdown_batch_size:
+                if len(batch) >= self._max_shutdown_batch_size:
                     try:
                         await asyncio.wait_for(
                             self._flush(batch), deadline - time.monotonic()
@@ -73,10 +108,13 @@ class FlushQueue(typing.Generic[T]):
                         batch = []
                     except asyncio.TimeoutError:
                         return
-            try:
-                await asyncio.wait_for(self._flush(batch), deadline - time.monotonic())
-            except asyncio.TimeoutError:
-                return
+            if batch:
+                try:
+                    await asyncio.wait_for(
+                        self._flush(batch), deadline - time.monotonic()
+                    )
+                except asyncio.TimeoutError:
+                    return
 
     async def _flush(self, batch: list[T]) -> None:
         if self._dedupe_key is not None:

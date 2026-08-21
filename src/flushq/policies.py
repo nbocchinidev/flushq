@@ -17,8 +17,11 @@ class FlushPolicy(typing.Protocol[T]):
 class IntervalPolicy(FlushPolicy[T]):
     """Flush when a record count or time limit is reached, whichever comes first.
 
+    The flush clock starts when the first buffered item arrives. An idle queue does
+    not produce a flush.
+
     Args:
-        max_wait_seconds: Max time to accumulate items before flushing.
+        max_wait_seconds: Max time the oldest buffered item waits before flushing.
         max_records: Max records to accumulate before flushing.
     """
 
@@ -33,6 +36,9 @@ class IntervalPolicy(FlushPolicy[T]):
         self.max_records = max_records
 
     async def collect(self, queue: asyncio.Queue[T], buffer: list[T]) -> None:
+        if not buffer:
+            buffer.append(await queue.get())
+
         deadline = time.monotonic() + self.max_wait_seconds
         while len(buffer) < self.max_records:
             remaining = deadline - time.monotonic()
