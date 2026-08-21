@@ -21,7 +21,7 @@ class IntervalPolicy(FlushPolicy[T]):
     not produce a flush.
 
     Args:
-        max_wait_seconds: Max time the oldst buffered item waits before flushing.
+        max_wait_seconds: Max time the oldest buffered item waits before flushing.
         max_records: Max records to accumulate before flushing.
     """
 

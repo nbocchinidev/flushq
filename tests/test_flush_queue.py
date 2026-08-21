@@ -230,7 +230,7 @@ async def test_an_idle_queue_never_produces_a_flush():
 
 
 @pytest.mark.asyncio
-async def test_a_batch_interrupted_mid_flush_is_settled_once_not_redelivered():
+async def test_a_batch_interrupted_mid_flush_is_not_redelivered():
     flushed: list[int] = []
     first_flush_started = asyncio.Event()
 

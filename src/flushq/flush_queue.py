@@ -16,14 +16,14 @@ class FlushQueue(typing.Generic[T]):
     Items are enqueued with ``enqueue`` and batched according to the provided ``FlushPolicy``. Each
     batch is passed to ``flush_fn``. Deduplicate within each batch by providing ``dedupe key``.
 
-    Run it either aas a TaskGroup child (preferred because a failed flush fails the group
+    Run it either as a TaskGroup child (preferred because a failed flush fails the group
     immediately) or as an async context manager to handle startup and clean shutdown:
 
         async with FlushQueue(flush_fn, policy) as q:
             await q.enqueue(item)
 
-    A batch reaches ``flush_fn`` at most once, never empty, and is not retired if cancellation
-    interupts it. Queued item are drained on shutdown.
+    A batch reaches ``flush_fn`` at most once, never empty, and is not retried if cancellation
+    interrupts it. Queued items are drained on shutdown.
 
     Args:
         flush_fn: Async callable that receives each batch.
@@ -90,6 +90,9 @@ class FlushQueue(typing.Generic[T]):
         try:
             while True:
                 await self._policy.collect(self._queue, batch)
+                if not batch:
+                    continue
+
                 pending, batch = batch, []
                 await self._flush(pending)
         except asyncio.CancelledError:
@@ -97,7 +100,7 @@ class FlushQueue(typing.Generic[T]):
 
             while not self._queue.empty() and time.monotonic() < deadline:
                 batch.append(self._queue.get_nowait())
-                if len(batch) == self._max_shutdown_batch_size:
+                if len(batch) >= self._max_shutdown_batch_size:
                     try:
                         await asyncio.wait_for(
                             self._flush(batch), deadline - time.monotonic()
