@@ -70,7 +70,7 @@ class FlushQueue(typing.Generic[T]):
         except asyncio.QueueFull:
             pass
         else:
-            # this fast path with the put_nowait never suspends so add an 
+            # this fast path with the put_nowait never suspends so add an
             # await hear so other tasks can run when have a tight producer
             self._fastpath_streak += 1
             if self._fastpath_streak >= 512:

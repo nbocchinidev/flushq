@@ -263,22 +263,24 @@ async def test_a_producer_that_never_awaits_is_drained_on_context_exit():
 
     assert flushed == [1, 2, 3]
 
+
 @pytest.mark.asyncio
 async def test_a_producer_that_never_awaits_is_drained_as_taskgroup_child():
     flushed: list[int] = []
-    
+
     async def sink(batch: list[int]) -> None:
         flushed.extend(batch)
 
     q: FlushQueue[int] = FlushQueue(sink, NaturalPolicy())
     async with asyncio.TaskGroup() as tg:
         writer = tg.create_task(q.run())
-        for n in (1 ,2 , 3):
+        for n in (1, 2, 3):
             await q.enqueue(n)
 
         writer.cancel()
 
     assert flushed == [1, 2, 3]
+
 
 @pytest.mark.asyncio
 async def test_the_flush_policy_can_fire_while_producer_is_still_producing():
@@ -287,7 +289,9 @@ async def test_the_flush_policy_can_fire_while_producer_is_still_producing():
     async def record(batch: list[int]) -> None:
         calls.append(batch)
 
-    async with FlushQueue(record, IntervalPolicy(max_wait_seconds=60, max_records=10)) as q:
+    async with FlushQueue(
+        record, IntervalPolicy(max_wait_seconds=60, max_records=10)
+    ) as q:
         for n in range(2000):
             await q.enqueue(n)
 
