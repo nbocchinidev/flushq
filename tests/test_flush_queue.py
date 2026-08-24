@@ -299,3 +299,103 @@ async def test_the_flush_policy_can_fire_while_producer_is_still_producing():
 
     assert flushes_during_production >= 1
     assert sorted(n for batch in calls for n in batch) == list(range(2000))
+
+
+@pytest.mark.asyncio
+async def test_enqueue_never_reports_success_for_item_on_consumer_will_read():
+    flushed: list[int] = []
+
+    async def sink(batch: list[int]) -> None:
+        flushed.extend(batch)
+
+    q: FlushQueue[int] = FlushQueue(sink, NaturalPolicy())
+    holder: dict[str, asyncio.Task[None]] = {}
+
+    async def canceller() -> None:
+        holder["writer"].cancel()
+
+    c = asyncio.create_task(canceller())
+    writer = asyncio.create_task(q.run())
+    holder["writer"] = writer
+    q._task = writer  # pyright: ignore[reportPrivateUsage] # what __aenter__ does
+    accepted = True
+    try:
+        await q.enqueue(5)
+    except RuntimeError:
+        accepted = False
+
+    await asyncio.sleep(0.01)
+    for t in (writer, c):
+        with contextlib.suppress(asyncio.CancelledError):
+            await t
+
+    assert flushed == [5] or not accepted, (
+        "enqueue return succcess but the item was lost: ",
+        f"flushed={flushed}, still queued={q._queue.qsize()}",  # pyright: ignore[reportPrivateUsage]
+    )
+
+
+@pytest.mark.asyncio
+async def test_producer_whose_first_enqueue_races_run_start_is_not_stranded():
+    async def broken_flush(batch: list[str]) -> None:
+        await asyncio.sleep(0)  # let producers run
+        raise RuntimeError("sink is dead")
+
+    q: FlushQueue[str] = FlushQueue(broken_flush, NaturalPolicy(), max_queue_size=1)
+
+    async def stale_producer() -> None:
+        await q.enqueue("stale")
+
+    async def fast_producer() -> None:
+        with contextlib.suppress(RuntimeError):
+            for i in range(10):
+                await q.enqueue(f"fast-{i}")
+
+    p_stale = asyncio.create_task(stale_producer())
+    writer = asyncio.create_task(q.run())
+    p_fast = asyncio.create_task(fast_producer())
+    _, pending = await asyncio.wait({p_stale, p_fast}, timeout=0.01)
+    stranded = p_stale in pending
+    for t in (p_stale, p_fast, writer):
+        t.cancel()
+        with contextlib.suppress(asyncio.CancelledError, RuntimeError):
+            await t
+
+    assert not stranded, "producer stranded in enqueue() after the flush task died"
+
+
+@pytest.mark.asyncio
+async def test_enqueue_raising_cancelled_means_item_not_delivered():
+    flushed: list[int] = []
+
+    async def sink(batch: list[int]) -> None:
+        flushed.extend(batch)
+
+    q: FlushQueue[int] = FlushQueue(sink, NaturalPolicy())
+    writer = asyncio.create_task(q.run())
+    await asyncio.sleep(0)  # writer tasks first step
+
+    for n in range(511):
+        await q.enqueue(n)
+
+    async def producer() -> None:
+        await q.enqueue(999)
+
+    p = asyncio.create_task(producer())
+    await asyncio.sleep(0)  # producer runs to streak yield now
+    p.cancel()
+    raised = False
+    try:
+        await p
+    except asyncio.CancelledError:
+        raised = True
+
+    await asyncio.sleep(0.05)  # consumer can settle what it accepted
+    writer.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await writer
+
+    delivered = 999 in flushed
+    assert not (raised and delivered), (
+        "enqueue raised CancelledError (so item not enqueue) but item was delivered anyway"
+    )

@@ -9,6 +9,8 @@ from flushq.policies import FlushPolicy
 
 T = typing.TypeVar("T")
 
+YIELD_EVERY_PUTS = 512
+
 
 class FlushQueue(typing.Generic[T]):
     """Async buffer that collects items and flushes them in batches.
@@ -56,37 +58,38 @@ class FlushQueue(typing.Generic[T]):
         self._fastpath_streak: int = 0
 
     async def enqueue(self, item: T) -> None:
+        if not self._started or self._fastpath_streak >= YIELD_EVERY_PUTS:
+            self._fastpath_streak = 0
+            await asyncio.sleep(0)
+
         run_task = self._task
         if run_task is not None and run_task.done():
             self._raise_consumer_gone(run_task)
-
-        # a producer that never awaits may not have run any of the run() method
-        # code yet so if not hand over event loop to other waiting tasks
-        if not self._started:
-            await asyncio.sleep(0)
 
         try:
             self._queue.put_nowait(item)
         except asyncio.QueueFull:
             pass
         else:
-            # this fast path with the put_nowait never suspends so add an
-            # await here so other tasks can run when have a tight producer
             self._fastpath_streak += 1
-            if self._fastpath_streak >= 512:
-                self._fastpath_streak = 0
-                await asyncio.sleep(0)
 
             return
 
+        self._fastpath_streak = 0
         if run_task is None:
             await self._queue.put(item)
             return
 
         put = asyncio.ensure_future(self._queue.put(item))
-        done, _ = await asyncio.wait(
-            (put, run_task), return_when=asyncio.FIRST_COMPLETED
-        )
+        try:
+            done, _ = await asyncio.wait(
+                (put, run_task), return_when=asyncio.FIRST_COMPLETED
+            )
+        except asyncio.CancelledError:
+            # dont orphan the put, a cancelled enqueue should not deliver
+            put.cancel()
+            raise
+
         if put in done:
             await put
             return
@@ -156,6 +159,7 @@ class FlushQueue(typing.Generic[T]):
             raise RuntimeError("running task has already been started")
 
         self._task = asyncio.create_task(self.run())
+        await asyncio.sleep(0)
         return self
 
     async def __aexit__(
