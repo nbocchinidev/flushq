@@ -92,6 +92,12 @@ class FlushQueue(typing.Generic[T]):
 
         if put in done:
             await put
+            if run_task.done():
+                # consumer died so item in queue with nothing to ever flush it
+                exc = run_task.exception() if not run_task.cancelled() else None
+                raise RuntimeError(
+                    "flush task died as the item was accepted, it will not be flushed"
+                ) from exc
             return
         put.cancel()
         self._raise_consumer_gone(run_task)
@@ -159,7 +165,11 @@ class FlushQueue(typing.Generic[T]):
             raise RuntimeError("running task has already been started")
 
         self._task = asyncio.create_task(self.run())
-        await asyncio.sleep(0)
+        try:
+            await asyncio.sleep(0)
+        except asyncio.CancelledError:
+            self._task.cancel()
+            raise
         return self
 
     async def __aexit__(

@@ -330,7 +330,7 @@ async def test_enqueue_never_reports_success_for_item_on_consumer_will_read():
             await t
 
     assert flushed == [5] or not accepted, (
-        "enqueue return succcess but the item was lost: ",
+        "enqueue returned succcess but the item was lost: "
         f"flushed={flushed}, still queued={q._queue.qsize()}",  # pyright: ignore[reportPrivateUsage]
     )
 
@@ -375,7 +375,7 @@ async def test_enqueue_raising_cancelled_means_item_not_delivered():
     writer = asyncio.create_task(q.run())
     await asyncio.sleep(0)  # writer tasks first step
 
-    for n in range(511):
+    for n in range(512):
         await q.enqueue(n)
 
     async def producer() -> None:
@@ -390,7 +390,6 @@ async def test_enqueue_raising_cancelled_means_item_not_delivered():
     except asyncio.CancelledError:
         raised = True
 
-    await asyncio.sleep(0.05)  # consumer can settle what it accepted
     writer.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await writer
@@ -398,4 +397,28 @@ async def test_enqueue_raising_cancelled_means_item_not_delivered():
     delivered = 999 in flushed
     assert not (raised and delivered), (
         "enqueue raised CancelledError (so item not enqueue) but item was delivered anyway"
+    )
+
+
+@pytest.mark.asyncio
+async def test_full_queue_accept_path_refuses_when_consumer_dies():
+    async def sink(batch: list[int]) -> None:
+        raise RuntimeError("sink is dead")  # no await and dies in same step
+
+    q: FlushQueue[int] = FlushQueue(sink, NaturalPolicy(), max_queue_size=1)
+    writer = asyncio.create_task(q.run())
+    await asyncio.sleep(0)
+    await q.enqueue(1)
+    accepted = True
+    try:
+        await q.enqueue(2)
+    except RuntimeError:
+        accepted = False
+
+    writer.cancel()
+    with contextlib.suppress(asyncio.CancelledError, RuntimeError):
+        await writer
+
+    assert not accepted, (
+        f"accecpt path reported success for lost item that is still queued, queue={q._queue.qsize()}"  # pyright: ignore[reportPrivateUsage]
     )
