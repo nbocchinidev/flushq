@@ -248,3 +248,54 @@ async def test_a_batch_interrupted_mid_flush_is_not_redelivered():
     with contextlib.suppress(asyncio.CancelledError):
         await task
     assert flushed == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_a_producer_that_never_awaits_is_drained_on_context_exit():
+    flushed: list[int] = []
+
+    async def sink(batch: list[int]) -> None:
+        flushed.extend(batch)
+
+    async with FlushQueue(sink, NaturalPolicy()) as q:
+        for n in (1, 2, 3):
+            await q.enqueue(n)
+
+    assert flushed == [1, 2, 3]
+
+
+@pytest.mark.asyncio
+async def test_a_producer_that_never_awaits_is_drained_as_taskgroup_child():
+    flushed: list[int] = []
+
+    async def sink(batch: list[int]) -> None:
+        flushed.extend(batch)
+
+    q: FlushQueue[int] = FlushQueue(sink, NaturalPolicy())
+    async with asyncio.TaskGroup() as tg:
+        writer = tg.create_task(q.run())
+        for n in (1, 2, 3):
+            await q.enqueue(n)
+
+        writer.cancel()
+
+    assert flushed == [1, 2, 3]
+
+
+@pytest.mark.asyncio
+async def test_the_flush_policy_can_fire_while_producer_is_still_producing():
+    calls: list[list[int]] = []
+
+    async def record(batch: list[int]) -> None:
+        calls.append(batch)
+
+    async with FlushQueue(
+        record, IntervalPolicy(max_wait_seconds=60, max_records=10)
+    ) as q:
+        for n in range(2000):
+            await q.enqueue(n)
+
+        flushes_during_production = len(calls)
+
+    assert flushes_during_production >= 1
+    assert sorted(n for batch in calls for n in batch) == list(range(2000))

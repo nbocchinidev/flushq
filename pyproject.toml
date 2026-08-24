@@ -1,6 +1,6 @@
 [project]
 name = "flushq"
-version = "0.2.0"
+version = "0.2.1"
 description = "Async batching queue with pluggable flush policies"
 readme = "README.md"
 license = "MIT"

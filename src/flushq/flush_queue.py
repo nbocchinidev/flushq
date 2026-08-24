@@ -52,16 +52,32 @@ class FlushQueue(typing.Generic[T]):
         self._task: asyncio.Task[None] | None = None
         self._max_shutdown_wait = max_shutdown_wait
         self._max_shutdown_batch_size = max_shutdown_batch_size
+        self._started: bool = False
+        self._fastpath_streak: int = 0
 
     async def enqueue(self, item: T) -> None:
         run_task = self._task
         if run_task is not None and run_task.done():
             self._raise_consumer_gone(run_task)
+
+        # a producer that never awaits may not have run any of the run() method
+        # code yet so if not hand over event loop to other waiting tasks
+        if not self._started:
+            await asyncio.sleep(0)
+
         try:
             self._queue.put_nowait(item)
-            return
         except asyncio.QueueFull:
             pass
+        else:
+            # this fast path with the put_nowait never suspends so add an
+            # await here so other tasks can run when have a tight producer
+            self._fastpath_streak += 1
+            if self._fastpath_streak >= 512:
+                self._fastpath_streak = 0
+                await asyncio.sleep(0)
+
+            return
 
         if run_task is None:
             await self._queue.put(item)
@@ -85,6 +101,7 @@ class FlushQueue(typing.Generic[T]):
         if self._task is None:
             self._task = asyncio.current_task()
 
+        self._started = True
         batch: list[T] = []
 
         try:
